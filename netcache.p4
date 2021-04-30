@@ -150,8 +150,6 @@ parser IngressParser(packet_in        pkt,
 
     state parse_ipv4 {
         pkt.extract(hdr.ipv4);
-        meta.src_port = 0;
-        meta.dst_port = 0;
         transition select(hdr.ipv4.protocol) {
             IP_PROTO_TCP    : parse_tcp;
             IP_PROTO_UDP    : parse_udp;
@@ -270,14 +268,14 @@ control Ingress(
         hdr.ipv4.src_addr = hdr.ipv4.dst_addr;
         hdr.ipv4.dst_addr = meta.tor_ser.ipv4_addr;
         hdr.udp.src_port = hdr.udp.dst_port;
-        hdr.dst_port = meta.tor_ser.udp_port;
+        hdr.udp.dst_port = meta.tor_ser.udp_port;
 
         // Set op
         hdr.dcnc.op = DCNC_CACHE_HIT;
     }
 
     action tor_ser_value_update_act () {
-        tor_ser_value_reg_write.execute(meta.tor_ser.index);
+        tor_ser_value_reg_update.execute(meta.tor_ser.index);
     }
 
     action drop() {
@@ -315,11 +313,11 @@ control Ingress(
                 }
             }
 
-            if (meta.tor_ser_md.is_valid == 1) {
+            if (meta.tor_ser.is_valid == 1) {
                 if (hdr.dcnc.op == DCNC_READ_REQUEST) {
                     tor_ser_value_read_act();
                 } else if (hdr.dcnc.op == DCNC_WRITE_REPLY || hdr.dcnc.op == DCNC_READ_REPLY) {
-                    apply (tor_ser_value_update);
+                    tor_ser_value_update_act();
                 }
             }
         }
