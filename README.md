@@ -7,5 +7,5 @@ Adapted/ translated from:
 - https://github.com/netx-repo/netcache-p4 (in progress)
 
 TODO:
-- HH detectors
+- HH detectors for popular/ hot keys
 - Hot key reporting to the control plane
