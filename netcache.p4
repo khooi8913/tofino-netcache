@@ -90,8 +90,7 @@ header netcache_h {
 }
 
 header ing_port_mirror_h {
-    @padding bit<6> pad0;
-    bit<10> mirror_session;
+    bit<48> nc_key;
 }
 
 /*************************************************************************
@@ -181,8 +180,8 @@ parser IngressParser(packet_in        pkt,
 
     /***************** M O D U L E S  *********************/
 
-#include "include/cms.p4"
-#include "include/bf.p4"
+#include "p4_modules/cms.p4"
+#include "p4_modules/bf.p4"
 
     /***************** M A T C H - A C T I O N  *********************/
 
@@ -200,11 +199,6 @@ control Ingress(
     BF() bf;
 
     Random<bit<4>>() rng;
-
-    action drop() {
-        ig_dprsr_md.drop_ctl = 0x0;    // drop packet
-        exit;
-    }
 
     action nc_cache_check_act(bit<16> index) {
         meta.nc_md.index = index;
@@ -311,7 +305,6 @@ control Ingress(
 
     table threshold {
         key = {
-            // TODO: this needs to be slightly readjusted
             miss_count[19:0] : range;
         }
         actions = {
@@ -342,12 +335,18 @@ control Ingress(
         ig_tm_md.ucast_egress_port = port;
     }
 
+    action drop() {
+        ig_dprsr_md.drop_ctl = 0x0;    // drop packet
+        exit;
+    }
+
     table ipv4_forward {
         key = {
-            ig_intr_md.ingress_port : exact;
+            hdr.ipv4.dst_addr : exact;
         }
         actions = {
             forward;
+            drop;
             NoAction;
         }
         default_action = NoAction();
@@ -391,6 +390,7 @@ control Ingress(
                 }
             }
         }
+
         ipv4_forward.apply();
 
         // bypass egress for now
@@ -407,7 +407,13 @@ control IngressDeparser(packet_out pkt,
     /* Intrinsic */
     in    ingress_intrinsic_metadata_for_deparser_t  ig_dprsr_md)
 {
+    Mirror() mirror;
+
     apply {
+        if(ig_dprsr_md.mirror_type == 1) {      // different mirror types can define different sets of headers
+            mirror.emit<ing_port_mirror_h>(meta.mirror_session, {hdr.nc.key});   // which session?
+        }
+
         pkt.emit(hdr);
     }
 }
