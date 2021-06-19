@@ -15,167 +15,77 @@ from mirror_pd_rpc import * # Mirror-specific data types
 ####### Additional imports ########
 import pdb # To debug insert pdb.set_trace() anywhere
 ####### Utils #######
-from scapy.all import *
-load_layer('tls')
 import struct
 import os
 
-sid = 128
-egress_port = 1
+session_id = 128
+collector_port = 3
 
-class Test01TLSOnlyTest(BfRuntimeTest):
+class Test01SimpleReadQuery(BfRuntimeTest):
     def setUp(self):
         self.client_id = 0
-        self.p4_name = "iotell"
+        self.p4_name = "netcache"
         self.dev = 0
         self.dev_tgt = gc.Target(self.dev, pipe_id=0xFFFF)
 
         # Connect to the program, running on the target
         BfRuntimeTest.setUp(self, self.client_id, self.p4_name)
         self.bfrt_info = self.interface.bfrt_info_get(self.p4_name)
-        self.mirror_cfg_table = self.bfrt_info.table_get("$mirror.cfg")
 
-        self.iotell_report = self.bfrt_info.table_get("Ingress.iotell_report")
-        self.iotell_report.info.key_field_annotation_add("hdr.ssl.hs_type", "ssl")
-        self.iotell_report.info.key_field_annotation_add("hdr.ssl.hs_version", "ssl")
-        self.tables = [self.iotell_report]
+        self.mirror_cfg_table = self.bfrt_info.table_get("$mirror.cfg")
+        
+        self.nc_cache_check = self.bfrt_info.table_get("Ingress.nc_cache_check")
+        self.threshold = self.bfrt_info.table_get("Ingress.threshold")
+        self.hh_report = self.bfrt_info.table_get("Ingress.hh_report")
+        self.ipv4_forward = self.bfrt_info.table_get("Ingress.ipv4_forward")
+
+        self.nc_value_reg = self.bfrt_info.table_get("Ingress.nc_value_reg")
+        self.nc_valid_reg = self.bfrt_info.table_get("Ingress.nc_valid_reg")
+        self.nc_hit_counter = self.bfrt_info.table_get("Ingress.nc_hit_counter")
+
+        self.sketch0 = self.bfrt_info.table_get("Ingress.cms.sketch0")
+        self.sketch1 = self.bfrt_info.table_get("Ingress.cms.sketch1")
+        self.bf0 = self.bfrt_info.table_get("Ingress.bf.bf0")
+        self.bf1 = self.bfrt_info.table_get("Ingress.bf.bf1")
+
+        self.tables = [self.nc_cache_check, self.threshold, self.hh_report, self.ipv4_forward]
+        self.registers = [self.nc_value_reg, self.nc_valid_reg, self.nc_hit_counter, self.sketch0, self.sketch1, self.bf0, self.bf1]
 
     def runTest(self):
         print ("=== Setting up tables ===")
         self.mirror_cfg_table.entry_add(
             self.dev_tgt,
-            [self.mirror_cfg_table.make_key([gc.KeyTuple('$sid', sid)])],
+            [self.mirror_cfg_table.make_key([gc.KeyTuple('$sid', session_id)])],
             [self.mirror_cfg_table.make_data([gc.DataTuple('$direction', str_val="INGRESS"),
-                                            gc.DataTuple('$ucast_egress_port', egress_port),
+                                            gc.DataTuple('$ucast_egress_port', collector_port),
                                             gc.DataTuple('$ucast_egress_port_valid', bool_val=True),
                                             gc.DataTuple('$session_enable', bool_val=True)],
                                         '$normal')]
         )
 
-        key = self.iotell_report.make_key([gc.KeyTuple('hdr.ssl.hs_type', 0x01), gc.KeyTuple('hdr.ssl.hs_version', 0x0303)])
-        data = self.iotell_report.make_data([gc.DataTuple('mirror_session', sid)], "Ingress.mirror_to_collector")
-        self.iotell_report.entry_add(self.dev_tgt, [key], [data])
+        key = self.hh_report.make_key([gc.KeyTuple('send_to_controller', 0x01)])
+        data = self.hh_report.make_data([gc.DataTuple('mirror_session', session_id)], "Ingress.mirror_packet_to_controller_act")
+        self.hh_report.entry_add(self.dev_tgt, [key], [data])
 
-        print ("=== Loading PCAP ===")
-        tls_pkts = rdpcap(os.path.join(os.path.dirname(__file__), "tls_client_hello.pcap"))
-        num_pkts = len(tls_pkts)
-
-        num_client_hello_pkts = 0
-        for pkt in tls_pkts:
-            if 'TLSClientHello' in pkt:
-                num_client_hello_pkts = num_client_hello_pkts + 1
-        print("client hellos: " + str(num_client_hello_pkts) + " others: " + str(num_pkts-num_client_hello_pkts))   
-
-        for pkt in tls_pkts:
-            send_packet(self, 0, pkt)
-            pkt = struct.pack('>H', sid) / pkt
-            expected_pkt = copy.deepcopy(pkt)
-            verify_packet(self, expected_pkt, 1, timeout=1)
 
     def cleanUp(self):
         print("=== Cleaning up ===")
         self.mirror_cfg_table.entry_del(
             self.dev_tgt,
-            [self.mirror_cfg_table.make_key([gc.KeyTuple('$sid', sid)])]
+            [self.mirror_cfg_table.make_key([gc.KeyTuple('$sid', session_id)])]
         )
         try:
-            for t in self.tables:
-                keys = []
-            for (d, k) in t.entry_get(self.dev_tgt):
-                if k is not None:
-                    keys.append(k)
-            
-            t.entry_del(self.dev_tgt, keys)
-            try:
-                t.defaylt_entry_reset(self.dev_tgt)
-            except:
-                pass
+            for tab in self.tables:
+                tab.entry_del(self.dev_tgt)
             print("Tables cleaned up!")
+
+            for reg in self.registers:
+                reg.entry_del(self.dev_tgt)
+            print("Registers cleaned up!")
+
         except Exception as e:
             print("Error cleaning up: {}".format(e))
 
-    def tearDown(self):
-        self.cleanUp()
-        BfRuntimeTest.tearDown(self)
-
-class Test02TLSMixedTest(BfRuntimeTest):
-    def setUp(self):
-        self.client_id = 0
-        self.p4_name = "iotell"
-        self.dev = 0
-        self.dev_tgt = gc.Target(self.dev, pipe_id=0xFFFF)
-
-        # Connect to the program, running on the target
-        BfRuntimeTest.setUp(self, self.client_id, self.p4_name)
-        self.bfrt_info = self.interface.bfrt_info_get(self.p4_name)
-        self.mirror_cfg_table = self.bfrt_info.table_get("$mirror.cfg")
-
-        self.iotell_report = self.bfrt_info.table_get("Ingress.iotell_report")
-        self.iotell_report.info.key_field_annotation_add("hdr.ssl.hs_type", "ssl")
-        self.iotell_report.info.key_field_annotation_add("hdr.ssl.hs_version", "ssl")
-        self.tables = [self.iotell_report]
-
-    def runTest(self):
-        print ("=== Setting up tables ===")
-        self.mirror_cfg_table.entry_add(
-            self.dev_tgt,
-            [self.mirror_cfg_table.make_key([gc.KeyTuple('$sid', sid)])],
-            [self.mirror_cfg_table.make_data([gc.DataTuple('$direction', str_val="INGRESS"),
-                                            gc.DataTuple('$ucast_egress_port', egress_port),
-                                            gc.DataTuple('$ucast_egress_port_valid', bool_val=True),
-                                            gc.DataTuple('$session_enable', bool_val=True)],
-                                        '$normal')]
-        )
-
-        key = self.iotell_report.make_key([gc.KeyTuple('hdr.ssl.hs_type', 0x01), gc.KeyTuple('hdr.ssl.hs_version', 0x0303)])
-        data = self.iotell_report.make_data([gc.DataTuple('mirror_session', sid)], "Ingress.mirror_to_collector")
-        self.iotell_report.entry_add(self.dev_tgt, [key], [data])
-
-        print ("=== Loading PCAP ===")
-        tls_pkts = rdpcap(os.path.join(os.path.dirname(__file__), "tls_mixed.pcap"))
-        num_pkts = len(tls_pkts)
-
-        num_client_hello_pkts = 0
-        for pkt in tls_pkts:
-            if 'TLSClientHello' in pkt:
-                num_client_hello_pkts = num_client_hello_pkts + 1
-        print("client hellos: " + str(num_client_hello_pkts) + " others: " + str(num_pkts-num_client_hello_pkts))
-
-        count_client_hello = 0
-        for pkt in tls_pkts:
-            send_packet(self, 0, pkt)
-            if 'TLSClientHello' in pkt:
-                count_client_hello = count_client_hello + 1
-                pkt = struct.pack('>H', sid) / pkt
-                expected_pkt = copy.deepcopy(pkt)
-                verify_packet(self, expected_pkt, 1, timeout=1)
-            else:
-                expected_pkt = copy.deepcopy(pkt)
-                verify_no_packet(self, expected_pkt, 1, timeout=1)
-
-        assert count_client_hello == num_client_hello_pkts
-
-    def cleanUp(self):
-        print("=== Cleaning up ===")
-        self.mirror_cfg_table.entry_del(
-            self.dev_tgt,
-            [self.mirror_cfg_table.make_key([gc.KeyTuple('$sid', sid)])]
-        )
-        try:
-            for t in self.tables:
-                keys = []
-            for (d, k) in t.entry_get(self.dev_tgt):
-                if k is not None:
-                    keys.append(k)
-            
-            t.entry_del(self.dev_tgt, keys)
-            try:
-                t.defaylt_entry_reset(self.dev_tgt)
-            except:
-                pass
-            print("Tables cleaned up!")
-        except Exception as e:
-            print("Error cleaning up: {}".format(e))
 
     def tearDown(self):
         self.cleanUp()

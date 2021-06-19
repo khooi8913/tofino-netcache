@@ -354,7 +354,7 @@ control Ingress(
         
     apply {
         if(hdr.nc.isValid()) {
-            nc_cache_check.apply();
+            nc_cache_check.apply(); 
         
             if(meta.nc_md.exist == 1) {
                 // cache hit
