@@ -8,7 +8,7 @@ Adapted/ translated from:
 
 Supported features:
 - Key/ value cache
-- Statistics engine
+- Statistics engine with sampling
 
 Unsupported features:
 - No bitmap, i.e., memory optimizations
